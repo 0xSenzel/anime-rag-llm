@@ -56,18 +56,40 @@ def get_vector_store_service() -> VectorStoreService:
 
     return _vector_store_service_instance
 
-def get_llm_service() -> LlmService:
+def get_llm_service(vector_store_svc: VectorStoreService = Depends(get_vector_store_service)) -> LlmService:
     """
-    Dependency function to get the LlmService instance.
-    Initializes it on first call using environment variables implicitly
-    handled by the LlmService class constructor.
+    Provides a singleton instance of LlmService for FastAPI dependency injection.
+
+    This function initializes the LlmService on first call using environment variables
+    for configuration and the provided VectorStoreService instance. It ensures all
+    required environment variables are present and raises an HTTPException if any are missing.
+
+    Returns:
+        LlmService: The singleton instance of the language model service.
+
+    Raises:
+        HTTPException: If required environment variables or dependencies are missing,
+                       or if initialization fails.
     """
     global _llm_service_instance
     if _llm_service_instance is None:
+        api_key = os.getenv("GOOGLE_API_KEY")
+        default_model = os.getenv("MODEL_NAME")
+        summary_model = os.getenv("SUMMARY_MODEL_NAME")
+
+        if not api_key or not default_model or not summary_model:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="LLM configuration is missing in environment variables."
+            )
+        
         try:
-            # LlmService constructor handles reading env vars like GOOGLE_API_KEY
-            # Pass constructor args here if you want to override env vars or defaults
-            _llm_service_instance = LlmService()
+            _llm_service_instance = LlmService(
+                vector_store_svc=vector_store_svc,
+                api_key=api_key,
+                default_model=default_model,
+                summary_model=summary_model
+            )
         except (ValueError, ConnectionError) as e: # Catch specific init errors
              print(f"FATAL: Could not initialize LlmService: {e}") # Use logger in production
              raise HTTPException(

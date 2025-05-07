@@ -21,41 +21,39 @@ class LlmService:
     """
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        default_model_name: str = "gemini-1.5-flash",
-        summary_model_name: Optional[str] = None,
+        vector_store_svc: VectorStoreService,
+        api_key: str,
+        default_model: str,
+        summary_model: str,
         tokenizer_encoding: str = "cl100k_base",
     ):
         """
         Initializes the LlmService.
 
         Args:
-            api_key: Google API Key. Reads from GOOGLE_API_KEY env var if None.
-            default_model_name: Default model for generation. Reads from MODEL_NAME env var if set.
-            summary_model_name: Model for summarization. Reads from SUMMARY_MODEL_NAME env var if set,
-                                  otherwise defaults to default_model_name.
-            tokenizer_encoding: The tiktoken encoding to use for token counting estimates.
+            vector_store_svc: An initialized VectorStoreService instance for vector search and RAG.
+            api_key: Google API Key for authenticating with the Google GenAI service.
+            default_model_name: Default model name for text generation.
+            summary_model_name: Model name to use for summarization tasks.
+            tokenizer_encoding: The tiktoken encoding to use for token counting estimates (default: "cl100k_base").
         """
-        self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
-        if not self.api_key:
-            raise ValueError("Missing Google API Key. Set GOOGLE_API_KEY environment variable or pass via constructor.")
 
-        # Use env vars as overrides, then constructor args, then hardcoded defaults
-        self.default_model = os.getenv("MODEL_NAME") or default_model_name
-        self.summary_model = os.getenv("SUMMARY_MODEL_NAME") or summary_model_name
-
-        logger.info(f"Initializing LlmService with default_model='{self.default_model}', summary_model='{self.summary_model}'")
+        logger.info(f"Initializing LlmService with default_model='{default_model}', summary_model='{summary_model}', tokenizer_encoding='{tokenizer_encoding}'")
 
         try:
-            self.client = genai.Client(api_key=self.api_key)
+            self.client = genai.Client(api_key=api_key)
         except Exception as e:
             logger.error(f"Failed to initialize Google GenAI Client: {e}", exc_info=True)
             raise ConnectionError(f"Failed to initialize Google GenAI Client: {e}") from e
 
-        # Initialize tokenizer
         self.tokenizer = self._load_tokenizer(tokenizer_encoding)
         if not self.tokenizer:
              logger.warning("Tokenizer not available. Token counting features will be disabled.")
+        self.vector_store_svc = vector_store_svc
+        if not self.vector_store_svc:
+            logger.error("VectorStoreService instance not provided. LlmService requires a valid vector store for RAG features.")
+            raise ValueError("LlmService requires a valid VectorStoreService instance.")
+
 
     def _load_tokenizer(self, encoding_name: str) -> Optional[Any]:
         """Loads the tiktoken tokenizer."""
@@ -156,7 +154,6 @@ class LlmService:
         self,
         user_query: str,
         user_id: str,
-        vector_store: "VectorStoreService",
         character: Optional[str] = None,
         use_rag: bool = False,
         rag_k: int = 5,
@@ -182,7 +179,7 @@ class LlmService:
             try:
                 logger.info(f"Retrieving document chunks for RAG (user: {user_id}, k={rag_k})")
                 # Use the method for searching document chunks
-                retrieved_context = await vector_store.search_relevant_messages(
+                retrieved_context = await self.vector_store_svc.search_relevant_messages(
                     conversation_id='',
                     query_text=user_query,
                     k=rag_k
