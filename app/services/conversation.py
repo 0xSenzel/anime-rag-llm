@@ -280,7 +280,8 @@ class ConversationService:
     ) -> Tuple[bool, Optional[List[Message]]]:
         """
         Checks if a conversation needs summarization based on turn count OR
-        token count thresholds.
+        token count thresholds. If so, returns the messages to be summarized,
+        capped at the last 'summary_turns_threshold' turns.
         """
         try:
             last_summary_ts = self._get_latest_summary_timestamp(conversation_id)
@@ -292,42 +293,73 @@ class ConversationService:
             messages_since_last_summary = self.db.scalars(
                 select(Message)
                 .where(and_(*query_filter))
-                .order_by(Message.created_at.asc()) # Chronological for token counting if needed
+                .order_by(Message.created_at.asc()) # Chronological for token counting and slicing
             ).all()
 
             if not messages_since_last_summary:
                 return False, None # No messages since last summary
 
-            num_messages = len(messages_since_last_summary)
+            num_messages_retrieved = len(messages_since_last_summary)
             # A turn is often considered a user message + an assistant message
             # For simplicity, let's count raw messages for now, or adjust as num_messages // 2 for pairs.
-            num_turns = num_messages // 2
+            # This num_turns is for the trigger condition.
+            num_turns_for_trigger = num_messages_retrieved // 2
 
-            needs_summary_by_turns = num_turns >= summary_turns_threshold
+            needs_summary_by_turns = num_turns_for_trigger >= summary_turns_threshold
 
             needs_summary_by_tokens = False
             total_tokens = 0
-            if not needs_summary_by_turns and self.llm_service.tokenizer:
+            # Check token threshold only if turn threshold isn't met, as an optimization
+            if not needs_summary_by_turns and self.llm_service and self.llm_service.tokenizer:
                 try:
+                    # Calculate tokens on all messages since last summary
                     for msg in messages_since_last_summary:
-                        # Sum tokens from message content
                         total_tokens += self.llm_service.count_tokens(msg.content)
-                    logger.debug(f"Total tokens in messages since last summary: {total_tokens}")
+                    needs_summary_by_tokens = total_tokens >= summary_tokens_threshold
+                    if needs_summary_by_tokens:
+                        logger.debug(f"Convo {conversation_id} meets token threshold for summary: {total_tokens} >= {summary_tokens_threshold}")
                 except Exception as e:
                     logger.error(f"Failed to tokenize content for convo {conversation_id}: {e}. Skipping token check.", exc_info=True)
+                    # If tokenization fails, we can't rely on this check.
                     needs_summary_by_tokens = False
 
-            # 3. Combine conditions: Summarize if EITHER threshold is met
+
             needs_summary = needs_summary_by_turns or needs_summary_by_tokens
 
             if needs_summary:
-                reason = f"Turns ({num_turns} >= {summary_turns_threshold})" if needs_summary_by_turns else f"Tokens ({total_tokens} >= {summary_tokens_threshold})"
+                reason_parts = []
+                if needs_summary_by_turns:
+                    reason_parts.append(f"Turns ({num_turns_for_trigger} >= {summary_turns_threshold})")
+                if needs_summary_by_tokens:
+                    reason_parts.append(f"Tokens ({total_tokens} >= {summary_tokens_threshold})")
+                reason = " and ".join(reason_parts) if reason_parts else "Unknown reason"
+                
                 logger.info(f"Convo {conversation_id} needs summary. Reason: {reason}")
-                return True, messages_since_last_summary
+
+                # Truncate messages to the last 'summary_turns_threshold' turns for the actual summary input
+                # Ensure summary_turns_threshold is positive to avoid issues with slicing
+                max_messages_for_summary_input = 0
+                if summary_turns_threshold > 0:
+                    max_messages_for_summary_input = summary_turns_threshold * 2
+                
+                final_messages_for_summary = messages_since_last_summary
+                if max_messages_for_summary_input > 0 and num_messages_retrieved > max_messages_for_summary_input:
+                    # Take the last 'max_messages_for_summary_input' messages
+                    final_messages_for_summary = messages_since_last_summary[-max_messages_for_summary_input:]
+                    logger.info(f"Returning last {len(final_messages_for_summary)} messages (capped at {summary_turns_threshold} turns) for summarization.")
+                elif not final_messages_for_summary: # Should not happen if needs_summary is True and messages_since_last_summary was populated
+                    logger.warning(f"Convo {conversation_id} marked for summary, but no messages available after potential truncation logic. This is unexpected.")
+                    return False, None
+
+                return True, final_messages_for_summary
             else:
                 return False, None
         except sa_exc.SQLAlchemyError as e:
             logger.error(f"Database error checking summarization for convo {conversation_id}: {e}", exc_info=True)
+            self.db.rollback() # Rollback in case of DB error during checks
+            return False, None
+        except Exception as e: # Catch any other unexpected error
+            logger.error(f"Unexpected error in should_summarize for convo {conversation_id}: {e}", exc_info=True)
             return False, None
 
 

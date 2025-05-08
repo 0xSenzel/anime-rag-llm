@@ -56,20 +56,30 @@ def get_vector_store_service() -> VectorStoreService:
 
     return _vector_store_service_instance
 
-def get_llm_service(vector_store_svc: VectorStoreService = Depends(get_vector_store_service)) -> LlmService:
+def get_llm_service(
+    vector_store_svc: VectorStoreService = Depends(get_vector_store_service),
+    conversation_svc: ConversationService = Depends(get_conversation_service)    
+) -> LlmService:
     """
     Provides a singleton instance of LlmService for FastAPI dependency injection.
 
     This function initializes the LlmService on first call using environment variables
-    for configuration and the provided VectorStoreService instance. It ensures all
-    required environment variables are present and raises an HTTPException if any are missing.
+    for configuration and the provided VectorStoreService and ConversationService instances.
+    It ensures all required environment variables are present and raises an HTTPException
+    if any are missing.
+
+    Args:
+        vector_store_svc (VectorStoreService): The vector store service instance for embeddings
+                                              and similarity search.
+        conversation_svc (ConversationService): The conversation service instance for managing
+                                              chat history and context.
 
     Returns:
         LlmService: The singleton instance of the language model service.
 
     Raises:
         HTTPException: If required environment variables or dependencies are missing,
-                       or if initialization fails.
+                      or if initialization fails.
     """
     global _llm_service_instance
     if _llm_service_instance is None:
@@ -86,6 +96,7 @@ def get_llm_service(vector_store_svc: VectorStoreService = Depends(get_vector_st
         try:
             _llm_service_instance = LlmService(
                 vector_store_svc=vector_store_svc,
+                conversation_svc=conversation_svc,
                 api_key=api_key,
                 default_model=default_model,
                 summary_model=summary_model
