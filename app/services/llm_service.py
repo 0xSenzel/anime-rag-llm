@@ -1,11 +1,9 @@
-import os
 from dotenv import load_dotenv
 import logging, uuid
 from google import genai
-from typing import Iterable, Optional, List, Dict, Any
+from typing import Iterable, Optional, List, Dict
 from google.genai.types import GenerateContentResponse
 import asyncio
-import tiktoken
 from google.api_core import exceptions as google_exceptions
 from .vector_store import VectorStoreService
 from app.services.conversation import ConversationService
@@ -14,12 +12,16 @@ from fastapi import BackgroundTasks
 load_dotenv()  
 logger = logging.getLogger(__name__)
 
-# --- LlmService Class ---
-
 class LlmService:
     """
-    Handles interactions with the Google Generative AI models for text generation,
-    streaming responses, summarization, and tokenization estimation.
+    A service class that handles interactions with Google's Generative AI models.
+    
+    This service provides functionality for:
+    - Text generation with context from conversations and documents
+    - Streaming responses for real-time interaction
+    - Text summarization for conversation history
+    - Integration with RAG (Retrieval Augmented Generation)
+    - Character-based responses for anime personas
     """
     def __init__(
         self,
@@ -33,10 +35,15 @@ class LlmService:
         Initializes the LlmService.
 
         Args:
-            vector_store_svc: An initialized VectorStoreService instance for vector search and RAG.
-            api_key: Google API Key for authenticating with the Google GenAI service.
-            default_model_name: Default model name for text generation.
-            summary_model_name: Model name to use for summarization tasks.
+            vector_store_svc (VectorStoreService): An initialized VectorStoreService instance for vector search and RAG.
+            conversation_svc (ConversationService): An initialized ConversationService instance for managing conversations.
+            api_key (str): Google API Key for authenticating with the Google GenAI service.
+            default_model (str): Default model name for text generation.
+            summary_model (str): Model name to use for summarization tasks.
+
+        Raises:
+            ConnectionError: If initialization of Google GenAI Client fails.
+            ValueError: If vector_store_svc or conversation_svc is not provided.
         """
         self.api_key = api_key
         self.default_model = default_model
@@ -163,21 +170,18 @@ class LlmService:
         model: Optional[str] = None,
     ):
         """
-        Async generator yields text chunks for a query. Handles conversation context,
-        RAG, message saving, and background summarization.
+        Async generator that streams text responses for a user query, handling conversation context,
+        RAG (Retrieval Augmented Generation), message persistence, and background summarization.
 
         Args:
-            user_query: The user's input query.
-            user_id: The ID of the user.
-            conversation_service: Initialized instance of ConversationService.
-            background_tasks: FastAPI BackgroundTasks instance.
-            conversation_id: Optional ID of the existing conversation.
-            character: Optional character persona.
-            use_rag: Flag to enable RAG using uploaded documents.
-            rag_k: Number of document chunks to retrieve for RAG.
-            model: LLM model name (defaults to instance default).
-        Yields:
-            str: Text chunks from the LLM response.
+            user_query (str): The user's input query text.
+            user_id (str): Unique identifier for the user making the query.
+            background_tasks (BackgroundTasks): FastAPI BackgroundTasks instance for async operations.
+            conversation_id (uuid.UUID): Unique identifier for the conversation thread.
+            character (Optional[str]): Name of anime character persona to use for responses.
+            use_rag (bool): Whether to enable RAG using uploaded documents. Defaults to False.
+            rag_k (int): Number of relevant document chunks to retrieve for RAG. Defaults to 5.
+            model (Optional[str]): Name of LLM model to use. Defaults to instance default model.
         """
         full_llm_response_parts = []
         try:
@@ -264,96 +268,6 @@ class LlmService:
             pass
 
 
-    async def _consume_stream_async(self, sync_iterable: Iterable[GenerateContentResponse]):
-        """Helper async generator to consume the sync stream from Google API."""
-        try:
-            for chunk in await asyncio.to_thread(list, sync_iterable): # Consume all in thread
-                try:
-                    text_chunk = ""
-                    # Safer access, aligning with Google GenAI library structure
-                    if hasattr(chunk, 'text'):
-                        text_chunk = chunk.text
-                    elif hasattr(chunk, 'candidates') and chunk.candidates:
-                        content = getattr(chunk.candidates[0], 'content', None)
-                        if content and hasattr(content, 'parts') and content.parts:
-                            text_chunk = getattr(content.parts[0], 'text', "")
-
-                    if text_chunk:
-                        yield text_chunk
-                        # Optional slight delay, consider removing if not needed
-                        # await asyncio.sleep(0.01)
-                except StopIteration:
-                    # Expected when the sync stream finishes within the list conversion
-                    break
-                except Exception as proc_e:
-                    logger.warning(f"Could not process text from chunk: {proc_e}. Chunk: {chunk}", exc_info=True)
-                    yield "[Error processing chunk]"
-        except Exception as outer_e:
-             logger.error(f"Error consuming synchronous LLM stream in thread: {outer_e}", exc_info=True)
-             yield "[Error consuming LLM stream]"
-
-
-    async def generate_response_async(
-        self,
-        user_query: str,
-        context_docs: Optional[List[Dict]] = None,
-        character: Optional[str] = None,
-        model: Optional[str] = None
-    ) -> Optional[str]:
-        """
-        Generates a non-streaming response asynchronously.
-
-        Args:
-             user_query: The user's input query.
-             context_docs: Optional list of context document dictionaries.
-             character: Optional character persona.
-             model: LLM model name (defaults to instance default).
-
-        Returns:
-             The generated text response as a string, or None on failure.
-        """
-        effective_model = model or self.default_model
-        final_prompt = self._prepare_prompt_and_context(
-             user_query=user_query,
-             context_docs=context_docs,
-             character=character,
-             context_source_type="documents" # Generic source type for non-stream
-        )
-        logger.info(f"Generating non-streaming response with model {effective_model}")
-        logger.debug(f"Full Prompt for Non-Streaming:\n{final_prompt}")
-
-        try:
-            # Use asyncio.to_thread for the blocking SDK call
-            response = await asyncio.to_thread(
-                self.client.models.generate_content,
-                model=effective_model,
-                contents=final_prompt,
-                # Add safety_settings, generation_config if needed
-            )
-
-            # Extract text safely
-            text_response = None
-            if hasattr(response, 'text'):
-                 text_response = response.text
-            elif hasattr(response, 'candidates') and response.candidates:
-                 candidate = response.candidates[0]
-                 if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts') and candidate.content.parts:
-                     text_response = getattr(candidate.content.parts[0], 'text', None)
-
-            if text_response:
-                 return text_response.strip()
-            else:
-                 logger.warning(f"LLM response did not contain expected text structure. Response: {response}")
-                 return None
-
-        except google_exceptions.GoogleAPIError as api_err:
-            logger.error(f"Google API Error during non-streaming generation with {effective_model}: {api_err}", exc_info=True)
-            return None # Or raise custom error
-        except Exception as e:
-            logger.error(f"Unexpected error during non-streaming generation with {effective_model}: {e}", exc_info=True)
-            return None # Or raise
-
-
     async def summarize_text_async(self, text_to_summarize: str, model: Optional[str] = None) -> Optional[str]:
         """
         Summarizes the given text using the configured summary model.
@@ -398,95 +312,6 @@ class LlmService:
         except Exception as e:
             logger.error(f"Unexpected error during text summarization with {effective_model}: {e}", exc_info=True)
             return None
-
-    async def _consume_stream_async(self, sync_iterable: Iterable[GenerateContentResponse]):
-        """Helper async generator to consume the sync stream from Google API."""
-        try:
-            for chunk in await asyncio.to_thread(list, sync_iterable): # Consume all in thread
-                try:
-                    text_chunk = ""
-                    # Safer access, aligning with Google GenAI library structure
-                    if hasattr(chunk, 'text'):
-                        text_chunk = chunk.text
-                    elif hasattr(chunk, 'candidates') and chunk.candidates:
-                        content = getattr(chunk.candidates[0], 'content', None)
-                        if content and hasattr(content, 'parts') and content.parts:
-                            text_chunk = getattr(content.parts[0], 'text', "")
-
-                    if text_chunk:
-                        yield text_chunk
-                        # Optional slight delay, consider removing if not needed
-                        # await asyncio.sleep(0.01)
-                except StopIteration:
-                    # Expected when the sync stream finishes within the list conversion
-                    break
-                except Exception as proc_e:
-                    logger.warning(f"Could not process text from chunk: {proc_e}. Chunk: {chunk}", exc_info=True)
-                    yield "[Error processing chunk]"
-        except Exception as outer_e:
-             logger.error(f"Error consuming synchronous LLM stream in thread: {outer_e}", exc_info=True)
-             yield "[Error consuming LLM stream]"
-
-
-    async def generate_response_async(
-        self,
-        user_query: str,
-        context_docs: Optional[List[Dict]] = None,
-        character: Optional[str] = None,
-        model: Optional[str] = None
-    ) -> Optional[str]:
-        """
-        Generates a non-streaming response asynchronously.
-
-        Args:
-             user_query: The user's input query.
-             context_docs: Optional list of context document dictionaries.
-             character: Optional character persona.
-             model: LLM model name (defaults to instance default).
-
-        Returns:
-             The generated text response as a string, or None on failure.
-        """
-        effective_model = model or self.default_model
-        final_prompt = self._prepare_prompt_and_context(
-             user_query=user_query,
-             context_docs=context_docs,
-             character=character,
-             context_source_type="documents" # Generic source type for non-stream
-        )
-        logger.info(f"Generating non-streaming response with model {effective_model}")
-        logger.debug(f"Full Prompt for Non-Streaming:\n{final_prompt}")
-
-        try:
-            # Use asyncio.to_thread for the blocking SDK call
-            response = await asyncio.to_thread(
-                self.client.models.generate_content,
-                model=effective_model,
-                contents=final_prompt,
-                # Add safety_settings, generation_config if needed
-            )
-
-            # Extract text safely
-            text_response = None
-            if hasattr(response, 'text'):
-                 text_response = response.text
-            elif hasattr(response, 'candidates') and response.candidates:
-                 candidate = response.candidates[0]
-                 if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts') and candidate.content.parts:
-                     text_response = getattr(candidate.content.parts[0], 'text', None)
-
-            if text_response:
-                 return text_response.strip()
-            else:
-                 logger.warning(f"LLM response did not contain expected text structure. Response: {response}")
-                 return None
-
-        except google_exceptions.GoogleAPIError as api_err:
-            logger.error(f"Google API Error during non-streaming generation with {effective_model}: {api_err}", exc_info=True)
-            return None # Or raise custom error
-        except Exception as e:
-            logger.error(f"Unexpected error during non-streaming generation with {effective_model}: {e}", exc_info=True)
-            return None # Or raise
 
 
     async def summarize_text_async(self, text_to_summarize: str, model: Optional[str] = None) -> Optional[str]:
