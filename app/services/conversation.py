@@ -1,5 +1,3 @@
-# app/services/conversation.py
-
 import logging
 import uuid
 import asyncio # Added for async operations
@@ -14,7 +12,7 @@ from app.models.conversation import Conversation
 from app.models.message import Message
 from app.models.summary import Summary
 from app.services.vector_store import VectorStoreService
-from app.services.llm_service import LlmService
+from app.utils.tokenizer_service import TokenizerService
 
 # --- Configuration ---
 # Ideally, use Pydantic Settings (from pydantic_settings import BaseSettings)
@@ -42,7 +40,10 @@ class ConversationService:
     Handles logic related to conversations, messages, summaries,
     and context management for the LLM. Includes async operations.
     """
-    def __init__(self, db: Session, vector_store: VectorStoreService, llm_service: LlmService):
+    def __init__(self, db: Session, vector_store_svc: VectorStoreService, tokenizer_svc: TokenizerService):
+        self.db = db
+        self.vector_store_svc = vector_store_svc
+        self.tokenizer_svc = tokenizer_svc
         """
         Initializes the ConversationService.
 
@@ -51,8 +52,7 @@ class ConversationService:
             llm_service: An initialized instance of the LlmService for generating text and summaries.
         """
         self.db = db
-        self.vector_store = vector_store
-        self.llm_service = llm_service
+        self.vector_store_svc = vector_store_svc
 
     # --- Core Methods ---
 
@@ -71,7 +71,7 @@ class ConversationService:
         and triggering background tasks for embedding and potential summarization.
         """
         try:
-            conversation = self.get_or_create_conversation(
+            conversation = self.get_conversation_by_id(
                 user_id=user_id,
                 conversation_id=conversation_id,
                 character=character
@@ -84,7 +84,7 @@ class ConversationService:
                 content=content
             )
             # 2. Trigger background task for user message embedding
-            background_tasks.add_task(self.vector_store.add_message_embedding, message=user_message, user_id=user_id)
+            background_tasks.add_task(self.vector_store_svc.add_message_embedding, message=user_message, user_id=user_id)
 
             # 3. Assemble Context for LLM
             llm_context = await self.get_context_for_llm(conversation.id, user_message.content)
@@ -119,7 +119,7 @@ class ConversationService:
                 content=content
             )
             # Trigger background task for assistant message embedding
-            background_tasks.add_task(self.vector_store.add_message_embedding, assistant_message, user_id=user_id)
+            background_tasks.add_task(self.vector_store_svc.add_message_embedding, assistant_message, user_id=user_id)
             return assistant_message
         except sa_exc.SQLAlchemyError as e:
             logger.error(f"Database error saving assistant response for convo {conversation_id}: {e}", exc_info=True)
@@ -150,7 +150,7 @@ class ConversationService:
         summary_content = ""
         if latest_summary and latest_summary.summary_text:
             summary_content = f"Summary of earlier conversation:\n{latest_summary.summary_text}"
-            summary_tokens = self.llm_service.count_tokens(summary_content)
+            summary_tokens = self.tokenizer_svc.count_tokens(summary_content)
             if summary_tokens <= available_tokens:
                 context_parts.append({'role': 'system', 'content': summary_content}) # Use system role for summary
                 available_tokens -= summary_tokens
@@ -166,7 +166,7 @@ class ConversationService:
         relevant_history_results = []
         if available_tokens > 100: # Only search if we have some token budget left
             try:
-                relevant_history_results = await self.vector_store.search_relevant_messages(
+                relevant_history_results = await self.vector_store_svc.search_relevant_messages(
                     conversation_id=conversation_id,
                     query_text=current_query,
                     k=VECTOR_SEARCH_K
@@ -188,7 +188,7 @@ class ConversationService:
 
         # Add relevant history (older first)
         for res in relevant_history_results:
-            msg_tokens = self.llm_service.count_tokens(res['content'])
+            msg_tokens = self.tokenizer_svc.count_tokens(res['content'])
             if temp_token_count + msg_tokens <= available_tokens:
                 # Include essential fields for sorting and potential use
                 combined_messages.append({
@@ -204,7 +204,7 @@ class ConversationService:
 
         # Add recent messages (older first within the window)
         for msg in recent_messages:
-            msg_tokens = self.llm_service.count_tokens(msg.content)
+            msg_tokens = self.tokenizer_svc.count_tokens(msg.content)
             # Check if this specific message ID is already included from relevant search (unlikely but possible)
             if msg.id not in {m.get('id') for m in combined_messages if m.get('id')}:
                  if temp_token_count + msg_tokens <= available_tokens:
@@ -231,47 +231,7 @@ class ConversationService:
         # The calling function will format this list + the user query into the final prompt
         return context_parts
 
-
-    # --- Summarization Logic (including async wrapper) ---
-
-    async def _check_and_perform_summarization_async(self, conversation_id: uuid.UUID):
-        """
-        Background task: Checks if summarization is needed and performs it.
-        """
-        logger.info(f"Background task: Checking summarization for convo {conversation_id}")
-        # TODO: Improve background task handling:
-        # 1. Implement a task queue (e.g., Celery, Redis Queue (RQ), or FastAPI-Background-Tasks with a persistent backend)
-        #    to ensure reliable execution and retries for summarization tasks.
-        # 2. Consider caching summarization results (e.g., using Redis or FastAPI-Cache) to avoid redundant summarizations
-        #    if the same conversation segment is encountered again.  Use a cache key based on conversation_id and a hash
-        #    of the message content to ensure uniqueness.
-        # 3. Implement proper session management for background tasks. If using FastAPI BackgroundTasks directly,
-        #    use SessionLocal() from database.py to create a new session for each task. If using a task queue,
-        #    rely on the queue's session management (Celery/RQ).
-        try:
-            needs_summary, messages = self.should_summarize(
-                conversation_id=conversation_id,
-                summary_turns_threshold=DEFAULT_SUMMARY_TURNS_THRESHOLD,
-                summary_tokens_threshold=DEFAULT_SUMMARY_TOKENS_THRESHOLD
-            )
-
-            if needs_summary and messages:
-                logger.info(f"Background task: Performing summary for convo {conversation_id}")
-                summary_text = await self.perform_summary(messages)
-                if summary_text:
-                    summary_obj = self.save_summary(conversation_id, summary_text)
-                    if summary_obj:
-                        logger.info(f"Background task: Successfully saved summary {summary_obj.id}")
-                else:
-                     logger.warning(f"Background task: Summarization returned empty/failed for convo {conversation_id}")
-            else:
-                logger.info(f"Background task: No summarization needed for convo {conversation_id}")
-            self.db.commit()
-        except Exception as e:
-             logger.error(f"Background task error during summarization check/perform for {conversation_id}: {e}", exc_info=True)
-             self.db.rollback()
-
-
+    # --- Summarization ---
     def should_summarize(
         self,
         conversation_id: uuid.UUID,
@@ -310,11 +270,11 @@ class ConversationService:
             needs_summary_by_tokens = False
             total_tokens = 0
             # Check token threshold only if turn threshold isn't met, as an optimization
-            if not needs_summary_by_turns and self.llm_service and self.llm_service.tokenizer:
+            if not needs_summary_by_turns and self.tokenizer_svc.count_tokens:
                 try:
                     # Calculate tokens on all messages since last summary
                     for msg in messages_since_last_summary:
-                        total_tokens += self.llm_service.count_tokens(msg.content)
+                        total_tokens += self.tokenizer_svc.count_tokens(msg.content)
                     needs_summary_by_tokens = total_tokens >= summary_tokens_threshold
                     if needs_summary_by_tokens:
                         logger.debug(f"Convo {conversation_id} meets token threshold for summary: {total_tokens} >= {summary_tokens_threshold}")
@@ -361,30 +321,6 @@ class ConversationService:
         except Exception as e: # Catch any other unexpected error
             logger.error(f"Unexpected error in should_summarize for convo {conversation_id}: {e}", exc_info=True)
             return False, None
-
-
-    async def perform_summary(self, messages_to_summarize: List[Message]) -> Optional[str]:
-        """Generates a summary for the given messages using the LLM service."""
-        if not messages_to_summarize:
-            return None
-
-        conversation_text = "\n".join(
-            [f"{msg.role}: {msg.content}" for msg in messages_to_summarize]
-        )
-        logger.info(f"Requesting summary for {len(messages_to_summarize)} messages.")
-
-        try:
-            full_summary = await self.llm_service.summarize_text_async(conversation_text)
-
-            if full_summary:
-                logger.info("Summary generated successfully.")
-                return full_summary.strip()
-            else:
-                logger.warning("LLM returned an empty summary.")
-                return None
-        except Exception as e:
-            logger.error(f"Error during LLM summarization call: {e}", exc_info=True)
-            return None
 
     # --- Database Interaction Helpers (with basic error handling) ---
 
@@ -478,7 +414,7 @@ class ConversationService:
             self.db.rollback()
             return None
 
-    def get_or_create_conversation(self, user_id: str, conversation_id: Optional[uuid.UUID] = None, character: Optional[str] = None) -> Conversation:
+    def get_conversation_by_id(self, user_id: str, conversation_id: uuid.UUID) -> Conversation:
         """Gets or creates a conversation. Raises Exception on DB error."""
         try:
             if conversation_id:
@@ -489,14 +425,7 @@ class ConversationService:
                     return conversation
                 else:
                      logger.warning(f"Conversation ID {conversation_id} provided but not found. Creating new.")
-
-            new_conversation = Conversation(user_id=user_id, character=character)
-            self.db.add(new_conversation)
-
-            self.db.flush() # Flush to get ID
-            logger.info(f"Created new conversation {new_conversation.id} for user {user_id}")
-            return new_conversation
         except sa_exc.SQLAlchemyError as e:
-            logger.error(f"Database error getting/creating conversation for user {user_id}: {e}", exc_info=True)
+            logger.error(f"Database error getting conversation for user {user_id}: {e}", exc_info=True)
             self.db.rollback()
             raise

@@ -6,6 +6,7 @@ from app.services.vector_store import VectorStoreService, DEFAULT_VECTOR_DIMENSI
 from app.services.llm_service import LlmService
 from app.services.conversation import ConversationService
 from app.database import get_db
+from app.utils.tokenizer_service import TokenizerService
 
 # --- Caching Instances ---
 # Use global variables for simple instance caching during app lifetime
@@ -55,6 +56,40 @@ def get_vector_store_service() -> VectorStoreService:
              )
 
     return _vector_store_service_instance
+
+def get_tokenizer_service() -> TokenizerService:
+    """
+    Dependency function to get the TokenizerService instance.
+    Initializes it on first call using environment variables.
+    """
+    try:
+        return TokenizerService()
+    except Exception as e:
+        print(f"FATAL: Could not initialize TokenizerService: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Could not initialize tokenizer service: {e}"
+        )
+
+def get_conversation_service(
+    db: Session = Depends(get_db),
+    vector_store_svc: VectorStoreService = Depends(get_vector_store_service),
+    tokenizer_svc: TokenizerService = Depends(get_tokenizer_service)
+) -> ConversationService:
+    """
+    Dependency function to provide a ConversationService instance,
+    with injected DB session and LlmService.
+    """
+    try:
+        # Always create a new ConversationService per request to ensure fresh DB session
+        return ConversationService(db=db, vector_store_svc=vector_store_svc, tokenizer_svc=tokenizer_svc)
+    except Exception as e:
+        # Log or print for debugging
+        print(f"FATAL: Could not initialize ConversationService: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Could not initialize ConversationService: {e}"
+        )
 
 def get_llm_service(
     vector_store_svc: VectorStoreService = Depends(get_vector_store_service),
@@ -116,23 +151,5 @@ def get_llm_service(
 
     return _llm_service_instance
 
-def get_conversation_service(
-    db: Session = Depends(get_db),
-    llm_service: LlmService = Depends(get_llm_service)
-) -> ConversationService:
-    """
-    Dependency function to provide a ConversationService instance,
-    with injected DB session and LlmService.
-    """
-    try:
-        # Always create a new ConversationService per request to ensure fresh DB session
-        return ConversationService(db=db, llm_service=llm_service)
-    except Exception as e:
-        # Log or print for debugging
-        print(f"FATAL: Could not initialize ConversationService: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Could not initialize ConversationService: {e}"
-        )
         
 
