@@ -1,11 +1,9 @@
 import logging
 import uuid
-import asyncio # Added for async operations
 from typing import List, Optional, Tuple, Dict
 from sqlalchemy.orm import Session
-from sqlalchemy import desc, func, select, and_, exc as sa_exc # Added exc
+from sqlalchemy import func, select, and_, exc as sa_exc # Added exc
 from datetime import datetime, timezone
-from fastapi import BackgroundTasks
 
 # Import models
 from app.models.conversation import Conversation
@@ -53,81 +51,6 @@ class ConversationService:
         """
         self.db = db
         self.vector_store_svc = vector_store_svc
-
-    # --- Core Methods ---
-
-    async def handle_new_message(
-        self,
-        background_tasks: BackgroundTasks,
-        user_id: str,
-        content: str,
-        role: str,
-        conversation_id: Optional[uuid.UUID] = None,
-        character: Optional[str] = None,
-        # Add other parameters like use_rag if needed by llm_service.stream_llm_responses
-    ) -> Tuple[Conversation, Message, List[Dict]]: # Return convo, user msg, context used
-        """
-        Handles processing a new user message, saving it, preparing context,
-        and triggering background tasks for embedding and potential summarization.
-        """
-        try:
-            conversation = self.get_conversation_by_id(
-                user_id=user_id,
-                conversation_id=conversation_id,
-                character=character
-            )
-            # 1. Save User Message
-            user_message = self.save_message(
-                conversation_id=conversation.id,
-                user_id=user_id,
-                role=role,
-                content=content
-            )
-            # 2. Trigger background task for user message embedding
-            background_tasks.add_task(self.vector_store_svc.add_message_embedding, message=user_message, user_id=user_id)
-
-            # 3. Assemble Context for LLM
-            llm_context = await self.get_context_for_llm(conversation.id, user_message.content)
-
-            # 4. Check for Summarization (in background)
-            # We pass the *conversation id* and let the background task re-check
-            background_tasks.add_task(self._check_and_perform_summarization_async, conversation.id)
-
-            return conversation, user_message, llm_context
-
-        except sa_exc.SQLAlchemyError as e:
-            logger.error(f"Database error handling new message for user {user_id}: {e}", exc_info=True)
-            self.db.rollback()
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error handling new message for user {user_id}: {e}", exc_info=True)
-            raise
-
-    async def save_assistant_response(
-        self,
-        background_tasks: BackgroundTasks,
-        conversation_id: uuid.UUID,
-        user_id: str, # For verification/logging
-        content: str,
-    ) -> Message:
-        """Saves the assistant's response and triggers embedding."""
-        try:
-            assistant_message = self.save_message(
-                conversation_id=conversation_id,
-                user_id=user_id, # Pass user_id for save_message logic/checks
-                role="assistant",
-                content=content
-            )
-            # Trigger background task for assistant message embedding
-            background_tasks.add_task(self.vector_store_svc.add_message_embedding, assistant_message, user_id=user_id)
-            return assistant_message
-        except sa_exc.SQLAlchemyError as e:
-            logger.error(f"Database error saving assistant response for convo {conversation_id}: {e}", exc_info=True)
-            self.db.rollback()
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error saving assistant response for convo {conversation_id}: {e}", exc_info=True)
-            raise
 
     # --- Context Assembly ---
 
