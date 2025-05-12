@@ -229,6 +229,7 @@ class VectorStoreService:
         self,
         documents: List[Document],
         user_id: str,
+        conversation_id: uuid.UUID,
         batch_size: int = 100
     ) -> bool:
         """
@@ -252,7 +253,7 @@ class VectorStoreService:
             logger.info("No document chunks provided to add.")
             return True
 
-        logger.info(f"Processing {len(documents)} document chunks for user {user_id} in batches of {batch_size}.")
+        logger.info(f"Processing {len(documents)} document chunks for user {user_id} at conversation {conversation_id} in batches of {batch_size}.")
         all_successful = True
         processed_batches = 0
         total_vectors_processed = 0
@@ -262,6 +263,7 @@ class VectorStoreService:
             metadatas = [
                 {
                     "user_id": str(user_id),
+                    "conversation_id": str(conversation_id),
                     "document_id": str(doc.metadata.get("source", f"doc_{i}")),
                     "chunk_index": i,
                     "text": doc.page_content[:500],  # Store partial text for context
