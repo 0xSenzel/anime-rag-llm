@@ -33,6 +33,8 @@ VECTOR_SEARCH_K = 5
 
 logger = logging.getLogger(__name__)
 
+__all__ = ['ConversationService']
+
 class ConversationService:
     """
     Handles logic related to conversations, messages, summaries,

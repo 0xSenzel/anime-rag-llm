@@ -11,6 +11,8 @@ from app.services.vector_store import VectorStoreService # Assuming VectorStoreS
 
 logger = logging.getLogger(__name__)
 
+__all__ = ['load_and_split', 'process_uploaded_file']
+
 def load_and_split(file_path: str) -> List[Document]:
     # Load raw pages/text
     if file_path.endswith('.pdf'):

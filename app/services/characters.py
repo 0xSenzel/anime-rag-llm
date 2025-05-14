@@ -16,6 +16,8 @@ from app.models.characters import Character
 
 logger = logging.getLogger(__name__)
 
+__all__ = ["CharacterService", "CharacterBaseSchema"]
+
 class CharacterService:
     def __init__(self, db: Session):
         """
@@ -348,8 +350,3 @@ class CharacterService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="An unexpected error occurred"
             )
-
-# __all__ defines the public API of this module if someone uses `from app.services.characters import *`
-# It's good practice. CharacterBaseSchema might be useful if other parts of the app
-# need to understand the base structure without performing CRUD.
-__all__ = ["CharacterService", "CharacterBaseSchema"]

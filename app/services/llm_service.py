@@ -12,6 +12,8 @@ from fastapi import BackgroundTasks
 load_dotenv()  
 logger = logging.getLogger(__name__)
 
+__all__ = ['LlmService']
+
 class LlmService:
     """
     A service class that handles interactions with Google's Generative AI models.

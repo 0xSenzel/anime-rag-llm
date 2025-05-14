@@ -17,6 +17,8 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+__all__ = ['VectorStoreService', 'create_default_embedding_model']
+
 # --- Embedding Model Setup ---
 # It's better practice to initialize the embedding model once and pass it
 # to the service, rather than initializing it globally here.
