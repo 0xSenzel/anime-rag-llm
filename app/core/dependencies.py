@@ -7,6 +7,7 @@ from app.services.llm_service import LlmService
 from app.services.conversation import ConversationService
 from app.database import get_db
 from app.utils.tokenizer_service import TokenizerService
+from app.services.characters import CharacterService
 
 # --- Caching Instances ---
 # Use global variables for simple instance caching during app lifetime
@@ -150,6 +151,31 @@ def get_llm_service(
              )
 
     return _llm_service_instance
+
+def get_character_service(db: Session = Depends(get_db)) -> CharacterService:
+    """
+    Provides an instance of CharacterService for FastAPI dependency injection.
+    
+    This function creates a new CharacterService instance for each request,
+    ensuring a fresh database session is used.
+    
+    Args:
+        db (Session): SQLAlchemy database session from the get_db dependency.
+        
+    Returns:
+        CharacterService: A new instance of the character service.
+        
+    Raises:
+        HTTPException: If initialization fails.
+    """
+    try:
+        return CharacterService(db=db)
+    except Exception as e:
+        print(f"FATAL: Could not initialize CharacterService: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Could not initialize character service: {e}"
+        )
 
         
 
