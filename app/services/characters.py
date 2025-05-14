@@ -66,7 +66,7 @@ class CharacterService:
             self.db.commit()
             self.db.refresh(db_character)
             logger.info(f"Successfully created character '{db_character.name}' with ID: {db_character.id}")
-            return CharacterResponseSchema.from_orm(db_character)
+            return CharacterResponseSchema.model_validate(db_character, from_attributes=True)
             
         except HTTPException:
             # Re-raise HTTP exceptions (they're already formatted correctly)
@@ -121,7 +121,7 @@ class CharacterService:
                     detail=f"Character with ID '{character_id}' not found.",
                 )
             logger.debug(f"Successfully retrieved character '{db_character.name}' (ID: {character_id}).")
-            return CharacterResponseSchema.from_orm(db_character)
+            return CharacterResponseSchema.model_validate(db_character, from_attributes=True)
             
         except HTTPException:
             raise
@@ -159,7 +159,7 @@ class CharacterService:
         try:
             db_characters = self.db.query(Character).offset(skip).limit(limit).all()
             response_schemas = [
-                CharacterResponseSchema.from_orm(char) for char in db_characters
+                CharacterResponseSchema.model_validate(char, from_attributes=True) for char in db_characters
             ]
             logger.info(f"Retrieved {len(response_schemas)} characters.")
             return response_schemas
