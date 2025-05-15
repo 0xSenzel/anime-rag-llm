@@ -71,6 +71,22 @@ class CharacterBaseSchema(BaseModel):
             raise ValueError("Name must effectively be alphanumeric when spaces and apostrophes are ignored.")
         return v.title()
 
+    @field_validator('avatar_url')
+    @classmethod
+    def empty_url_to_none(cls, v):
+        """Convert empty string to None for URL fields."""
+        if v == "" or v is None:
+            return None
+        return v
+        
+    @field_validator('aliases', 'catchphrases', 'sample_dialogues', 'knowledge_domains')
+    @classmethod
+    def empty_list_to_none(cls, v):
+        """Convert empty lists to None for optional list fields."""
+        if v == [] or v == "":
+            return None
+        return v
+
     @field_validator('sample_dialogues')
     @classmethod
     def validate_dialogue_structure_and_length(cls, v: Optional[List[Dict[str, str]]]):
@@ -116,3 +132,8 @@ class RAGResponse(BaseModel):
     character_name: str
     prompt: str
     response: str
+
+class CharacterCreateResponseSchema(BaseModel):
+    status: str
+    message: str
+    character_id: str

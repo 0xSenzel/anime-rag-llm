@@ -4,21 +4,21 @@ from fastapi import APIRouter, HTTPException, Depends, status
 from app.schemas.character import (
     CharacterCreateSchema,
     CharacterMutationSchema,
-    CharacterResponseSchema
+    CharacterResponseSchema,
+    CharacterCreateResponseSchema
 )
 from app.services.characters import CharacterService
 from app.core.dependencies import get_character_service
 
 logger = logging.getLogger(__name__)
-
+ 
 router = APIRouter(prefix="/characters", tags=["characters"])
 
 
 @router.post(
     "/",
-    response_model=CharacterResponseSchema,
+    response_model=CharacterCreateResponseSchema,
     status_code=status.HTTP_201_CREATED,
-    summary="Create a new character"
 )
 async def create_new_character(
     character_data: CharacterCreateSchema,
@@ -30,7 +30,12 @@ async def create_new_character(
     - Other fields based on `CharacterCreateSchema`.
     """
     try:
-        return await char_service.create_character(character_data)
+        created_character = await char_service.create_character(character_data)
+        return CharacterCreateResponseSchema(
+            status="success",
+            message=f"Character '{created_character.name}' created successfully",
+            character_id=created_character.id
+        )
     except HTTPException: # Re-raise HTTPExceptions directly from the service
         raise
     except Exception as e:
@@ -46,7 +51,7 @@ async def create_new_character(
     summary="Get a character by ID"
 )
 async def read_character_by_id(
-    character_id: str, # The service expects a string ID
+    character_id: str,
     char_service: CharacterService = Depends(get_character_service)
 ):
     """
@@ -78,7 +83,7 @@ async def read_all_characters(
     """
     try:
         return await char_service.get_all_characters(skip=skip, limit=limit)
-    except Exception as e: # General exception for list retrieval
+    except Exception as e:
         logger.error(f"Unexpected error retrieving all characters: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

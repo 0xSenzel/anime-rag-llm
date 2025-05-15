@@ -1,11 +1,12 @@
 from sqlalchemy import Column, String, Text, JSON, DateTime
 from sqlalchemy.sql import func
 from app.database import Base
+import uuid
 
 class Character(Base):
     __tablename__ = "characters"
     
-    id = Column(String(36), primary_key=True, index=True)
+    id = Column(String(36), primary_key=True, index=True, default=lambda: str(uuid.uuid4()))
     name = Column(String(100), unique=True, index=True, nullable=False)
     aliases = Column(JSON, nullable=True)
     description = Column(Text, nullable=False)
