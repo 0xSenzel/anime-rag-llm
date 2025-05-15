@@ -141,7 +141,7 @@ class CharacterService:
             )
 
     async def get_all_characters(
-        self, skip: int = 0, limit: int = 100
+        self, skip: int = 0, limit: int = 10
     ) -> List[CharacterResponseSchema]:
         """
         Retrieves all characters with pagination.

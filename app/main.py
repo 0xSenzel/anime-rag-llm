@@ -1,4 +1,9 @@
 from fastapi import FastAPI
+from app.core.logging_config import setup_logging
+
+setup_logging()
+app = FastAPI()
+
 from app.routers import characters as characters_router
 from app.routers import upload, chat
 from app.database import Base, engine
