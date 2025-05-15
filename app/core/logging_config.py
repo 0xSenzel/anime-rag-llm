@@ -1,5 +1,6 @@
 import logging
 from logging.handlers import RotatingFileHandler
+import os
 
 class ColorFormatter(logging.Formatter):
     COLOR_CODES = {
@@ -12,15 +13,18 @@ class ColorFormatter(logging.Formatter):
     RESET_CODE = '\033[0m'
     
     def format(self, record):
+        filename = os.path.basename(record.pathname)
+        func_info = f":{record.funcName}()" if record.funcName and record.funcName != "<module>" else ""
+        
         color = self.COLOR_CODES.get(record.levelno, '')
         message = super().format(record)
-        return f"{color}{message}{self.RESET_CODE}"
+        return f"{color}{filename}{func_info} | {message}{self.RESET_CODE}"
 
 def setup_logging():
     """Configure logging for the application"""
     logging.basicConfig(
         level=logging.DEBUG,
-        format='%(asctime)s | %(levelname)-8s | %(name)-25s | %(message)s',
+        format='%(asctime)s | %(levelname)-8s | %(filename)s:%(funcName)-15s | %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S',
         handlers=[
             RotatingFileHandler(
