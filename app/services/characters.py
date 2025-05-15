@@ -209,6 +209,10 @@ class CharacterService:
             update_data_dict = character_update_data.model_dump(exclude_unset=True)
             logger.debug(f"Update data for character {character_id}: {update_data_dict}")
 
+            # Convert HttpUrl to string if present
+            if 'avatar_url' in update_data_dict:
+                update_data_dict['avatar_url'] = str(update_data_dict['avatar_url'])
+
             if "name" in update_data_dict and update_data_dict["name"].lower() != db_character.name.lower():
                 logger.debug(f"Name change detected for character {character_id}. Checking for conflicts.")
                 existing_character_with_new_name = (

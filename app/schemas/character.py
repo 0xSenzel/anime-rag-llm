@@ -118,8 +118,6 @@ class CharacterResponseSchema(CharacterBaseSchema):
     description: str = Field(...)
     backstory: str = Field(...)
     motivations: str = Field(...)
-    created_at: datetime
-    updated_at: datetime
 
     class Config:
         from_attributes = True
@@ -133,7 +131,7 @@ class RAGResponse(BaseModel):
     prompt: str
     response: str
 
-class CharacterCreateResponseSchema(BaseModel):
+class CharacterCreateUpdateResponseSchema(BaseModel):
     status: str
     message: str
     character_id: str

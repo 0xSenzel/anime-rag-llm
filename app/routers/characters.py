@@ -5,7 +5,7 @@ from app.schemas.character import (
     CharacterCreateSchema,
     CharacterMutationSchema,
     CharacterResponseSchema,
-    CharacterCreateResponseSchema
+    CharacterCreateUpdateResponseSchema
 )
 from app.services.characters import CharacterService
 from app.core.dependencies import get_character_service
@@ -17,7 +17,7 @@ router = APIRouter(prefix="/characters", tags=["characters"])
 
 @router.post(
     "/",
-    response_model=CharacterCreateResponseSchema,
+    response_model=CharacterCreateUpdateResponseSchema,
     status_code=status.HTTP_201_CREATED,
 )
 async def create_new_character(
@@ -31,7 +31,7 @@ async def create_new_character(
     """
     try:
         created_character = await char_service.create_character(character_data)
-        return CharacterCreateResponseSchema(
+        return CharacterCreateUpdateResponseSchema(
             status="success",
             message=f"Character '{created_character.name}' created successfully",
             character_id=created_character.id
@@ -92,12 +92,12 @@ async def read_all_characters(
 
 @router.put(
     "/{character_id}",
-    response_model=CharacterResponseSchema,
+    response_model=CharacterCreateUpdateResponseSchema,  # Changed from CharacterResponseSchema
     summary="Update a character"
 )
 async def update_existing_character(
     character_id: str,
-    character_update_data: CharacterMutationSchema, # Use CharacterMutationSchema for request body
+    character_update_data: CharacterMutationSchema,
     char_service: CharacterService = Depends(get_character_service)
 ):
     """
@@ -105,7 +105,12 @@ async def update_existing_character(
     Only fields provided in the request body will be updated.
     """
     try:
-        return await char_service.update_character(character_id, character_update_data)
+        updated_character = await char_service.update_character(character_id, character_update_data)
+        return CharacterCreateUpdateResponseSchema(
+            status="success",
+            message=f"Character '{updated_character.name}' updated successfully",
+            character_id=updated_character.id
+        )
     except HTTPException:
         raise
     except Exception as e:
