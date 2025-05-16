@@ -165,7 +165,7 @@ class LlmService:
         user_query: str,
         user_id: str,
         background_tasks: BackgroundTasks, 
-        conversation_id: uuid.UUID,
+        conversation_id: Optional[uuid.UUID] = None,
         character: Optional[str] = None,
         use_rag: bool = False,
         rag_k: int = 5,
@@ -186,16 +186,27 @@ class LlmService:
             model (Optional[str]): Name of LLM model to use. Defaults to instance default model.
         """
         full_llm_response_parts = []
-        try:
+        try:            
+            if not conversation_id:
+                conversation = self.conversation_svc.create_conversation(user_id)
+                conversation_id = conversation.id
+                logger.info(f"Created new conversation {conversation_id} for user {user_id}")
+            else:
+                try:
+                    conversation = self.conversation_svc.get_conversation_by_id(user_id, conversation_id)
+                    logger.debug(f"Using existing conversation {conversation_id}")
+                except ValueError as e:
+                    logger.warning(f"Conversation {conversation_id} not found, creating new one")
+                    conversation = self.conversation_svc.create_conversation(user_id)
+                    conversation_id = conversation.id
+
             background_tasks.add_task(self.conversation_svc.save_message, conversation_id, user_id, "user", user_query)
 
-
-            # Get previous conversation context
             conversation_history_context: Optional[List[Dict]] = None
             try:
                 conversation_history_context = await self.conversation_svc.get_context_for_llm(
                     conversation_id=conversation_id,
-                    current_query_content=user_query # To potentially exclude it if already saved
+                    current_query=user_query
                 )
             except Exception as e:
                 logger.error(f"Error retrieving conversation context for {conversation_id}: {e}", exc_info=True)
@@ -367,7 +378,7 @@ class LlmService:
     ):
         """Helper to run summarization in the background."""
         try:
-            needs_summary, messages_to_summarize = await self.conversation_svc.should_summarize(conv_id_uuid)
+            needs_summary, messages_to_summarize = self.conversation_svc.should_summarize(conversation_id)
             
             if needs_summary and messages_to_summarize:
                 logger.info(f"Summarization triggered for conversation {conversation_id}")

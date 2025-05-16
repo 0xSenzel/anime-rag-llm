@@ -278,21 +278,26 @@ class ConversationService:
             self.db.rollback()
             return []
 
-    def save_message(self, conversation_id: uuid.UUID, role: str, content: str, embedding_id: Optional[uuid.UUID] = None) -> Message:
+    def save_message(self, conversation_id: uuid.UUID, user_id: uuid.UUID, role: str, content: str, embedding_id: Optional[uuid.UUID] = None) -> Message:
         """Saves a message, updates conversation timestamp. Raises Exception on DB error."""
+        # Log the request details
+        logger.info(f"Attempting to save message - conversation_id: {conversation_id}, user_id: {user_id}, role: {role}, content length: {len(content)}")
+        
         try:
-            conversation = self.db.get(Conversation, conversation_id)
+            conversation = self.get_conversation_by_id(user_id, conversation_id)
             if not conversation:
                 raise ValueError(f"Conversation {conversation_id} not found for saving message.")
-            # Optional: Add user check here if needed
 
-            db_message = Message(conversation_id=conversation_id, role=role, content=content, embedding_id=embedding_id)
+            db_message = Message(
+                conversation_id=conversation_id,
+                role=role,
+                content=content,
+                embedding_id=embedding_id
+            )
             self.db.add(db_message)
-
             conversation.updated_at = func.now()
             self.db.add(conversation)
-
-            self.db.flush() # Flush to get ID and check constraints before returning
+            self.db.commit()  # Changed from flush() to commit
             logger.info(f"Saved message {db_message.id} for conversation {conversation_id}")
             return db_message
         except sa_exc.SQLAlchemyError as e:
@@ -340,17 +345,65 @@ class ConversationService:
             return None
 
     def get_conversation_by_id(self, user_id: str, conversation_id: uuid.UUID) -> Conversation:
-        """Gets or creates a conversation. Raises Exception on DB error."""
+        """Gets a conversation by ID. Raises Exception if not found."""
         try:
-            if conversation_id:
-                conversation = self.db.get(Conversation, conversation_id)
-                if conversation:
-                    # Optional: Verify user ownership
-                    # if conversation.user_id != user_id: ... raise error ...
-                    return conversation
-                else:
-                     logger.warning(f"Conversation ID {conversation_id} provided but not found. Creating new.")
+            conversation = self.db.get(Conversation, conversation_id)
+            if conversation:
+                # Optional: Verify user ownership
+                # if conversation.user_id != user_id: ... raise error ...
+                return conversation
+            else:
+                raise ValueError(f"Conversation {conversation_id} not found")
         except sa_exc.SQLAlchemyError as e:
             logger.error(f"Database error getting conversation for user {user_id}: {e}", exc_info=True)
             self.db.rollback()
             raise
+
+    def create_conversation(self, user_id: str, title: Optional[str] = None) -> Conversation:
+        """
+        Creates a new conversation for the specified user.
+        
+        Args:
+            user_id: The ID of the user who owns the conversation
+            title: Optional title for the conversation
+            
+        Returns:
+            Conversation: The newly created conversation
+            
+        Raises:
+            SQLAlchemyError: If database operation fails
+        """
+        try:
+            db_conversation = Conversation(
+                user_id=user_id,
+                title=title,
+                created_at=func.now(),
+                updated_at=func.now()
+            )
+            self.db.add(db_conversation)
+            self.db.commit()  # Changed from flush() to commit()
+            logger.info(f"Created new conversation {db_conversation.id} for user {user_id}")
+            return db_conversation
+        except sa_exc.SQLAlchemyError as e:
+            logger.error(f"Database error creating conversation for user {user_id}: {e}", exc_info=True)
+            self.db.rollback()
+            raise
+
+    def _get_latest_summary_timestamp(self, conversation_id: uuid.UUID) -> Optional[datetime]:
+        """Helper to get the creation timestamp of the most recent summary."""
+        try:
+            logger.debug(f"Fetching latest summary timestamp for conversation {conversation_id}")
+            latest_summary_ts = self.db.scalar(
+                select(func.max(Summary.created_at))
+                .where(Summary.conversation_id == conversation_id)
+            )
+            
+            if latest_summary_ts:
+                logger.debug(f"[Summary Timestamp] Found latest summary timestamp: {latest_summary_ts} for conversation {conversation_id}")
+            else:
+                logger.debug(f"[Summary Timestamp] No summaries found for conversation {conversation_id}")
+                
+            return latest_summary_ts
+        except sa_exc.SQLAlchemyError as e:
+            logger.error(f"[Summary Timestamp] Database error getting latest summary timestamp for convo {conversation_id}: {e}", exc_info=True)
+            return None

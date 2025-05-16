@@ -1,8 +1,19 @@
 from typing import List, Optional
 from pydantic import BaseModel, Field
+import uuid
 
 class ChatRequest(BaseModel):
     query: str = Field(..., example="How can I make the perfect cup of tea?")
+    user_id: str = Field(
+        ...,
+        description="Identifier for the user whose documents should be searched if RAG is enabled.",
+        example="123"
+    )
+    conversation_id: Optional[uuid.UUID] = Field(
+        None,
+        description="Optional conversation ID to continue an existing conversation",
+        example="123e4567-e89b-12d3-a456-426614174000"
+    )
     character: Optional[str] = Field(
         None,
         description="Optional anime character persona to role-play",
@@ -12,11 +23,6 @@ class ChatRequest(BaseModel):
         True,
         description="Whether to use Retrieval-Augmented Generation (RAG) with document context",
         example=True
-    )
-    user_id: str = Field(
-        ...,
-        description="Identifier for the user whose documents should be searched if RAG is enabled.",
-        example="123"
     )
     rag_k: int = Field(
         5,

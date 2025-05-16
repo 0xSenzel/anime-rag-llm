@@ -1,9 +1,8 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from app.services.llm_service import LlmService
-from app.services.vector_store import VectorStoreService
-import logging
+import logging, uuid
 from app.schemas.chat import ChatRequest, ChatResponse
-from app.core.dependencies import get_llm_service, get_vector_store_service
+from app.core.dependencies import get_llm_service
 
 logger = logging.getLogger(__name__)
 
@@ -12,8 +11,8 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 @router.post("/stream", response_model=ChatResponse, summary="Chat with RAG + Gemini")
 async def chat_endpoint(
     request: ChatRequest,
+    background_tasks: BackgroundTasks,
     llm_service: LlmService = Depends(get_llm_service),
-    vector_store_service: VectorStoreService = Depends(get_vector_store_service)
 ):
     """
     Handles chat requests and returns a ChatResponse with the LLM-generated response.
@@ -24,7 +23,8 @@ async def chat_endpoint(
         async for chunk in llm_service.stream_llm_responses(
             user_query=request.query,
             user_id=request.user_id,
-            vector_store=vector_store_service,
+            background_tasks=background_tasks,
+            conversation_id=request.conversation_id,
             character=request.character,
             use_rag=request.use_rag,
             rag_k=request.rag_k
