@@ -296,11 +296,13 @@ class VectorStoreService:
                     continue
 
                 vectors_to_upsert = []
+
                 for idx, (embedding, metadata) in enumerate(zip(embeddings, batch_metadatas)):
                     original_index = batch_indices[idx]
                     doc_identifier = str(metadata.get("document_id", "unknown"))
-                    vector_id = f"doc::{user_id}::{doc_identifier}::chunk_{original_index}"
+                    vector_id = f"{user_id}-{doc_identifier}-{original_index}"
                     vectors_to_upsert.append((vector_id, embedding, metadata))
+                    logger.info(f"the id vector is {vector_id}")
 
                 try:
                     upsert_response = await self._execute_blocking(

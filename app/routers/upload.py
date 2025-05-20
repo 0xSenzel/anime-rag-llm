@@ -24,6 +24,7 @@ async def upload_file(
         message = await process_uploaded_file(
             file=form_data.file,
             user_id=form_data.user_id,
+            conversation_id=form_data.conversation_id,
             vector_store=vector_store
         )
         return {"message": message}
