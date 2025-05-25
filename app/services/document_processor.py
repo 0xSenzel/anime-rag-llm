@@ -7,7 +7,8 @@ from langchain.docstore.document import Document
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from app.core.config import settings
-from app.services.vector_store import VectorStoreService # Assuming VectorStoreService is in this path
+from app.services.vector_store import VectorStoreService
+from app.services.storage import upload_file_to_supabase
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,7 @@ async def process_uploaded_file(
         raise HTTPException(status_code=400, detail="Unsupported file type. Only .pdf and .txt are allowed.")
 
     file_path = None
+    supabase_storage_key = None
     try:
         # Ensure upload directory exists
         try:
@@ -69,6 +71,14 @@ async def process_uploaded_file(
             logger.error(f"Failed to save uploaded file '{file.filename}' to '{file_path}': {save_err}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"Could not save uploaded file '{file.filename}'.")
 
+        # --- Upload to Supabase Storage using new module ---
+        try:
+            supabase_storage_key = await upload_file_to_supabase(file_path, file.filename, "anime-rag", user_id=user_id, conversation_id=conversation_id)
+            logger.info(f"File '{file.filename}' uploaded to Supabase Storage as '{supabase_storage_key}'")
+        except Exception as supabase_err:
+            logger.error(f"Supabase upload failed for '{file.filename}': {supabase_err}", exc_info=True)
+            raise
+
         # 3. Process the saved file: Load & Split
         logger.info(f"Processing and splitting file '{file.filename}'...")
         try:
@@ -84,7 +94,7 @@ async def process_uploaded_file(
         # 4. Add processed chunks to Vector Store
         logger.info(f"Adding {len(chunks)} chunks from '{file.filename}' to the vector store for user '{user_id}'...")
         try:
-            success = await vector_store.add_document_chunks(documents=chunks, user_id=user_id, conversation_id=conversation_id)
+            success = await vector_store.add_document_chunks(documents=chunks, user_id=user_id, conversation_id=conversation_id, namespace="documents")
             if not success:
                 logger.error(f"Failed to add document chunks from '{file.filename}' to the vector store.")
                 raise HTTPException(status_code=500, detail=f"Failed to index document '{file.filename}'.")

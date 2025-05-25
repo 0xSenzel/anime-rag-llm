@@ -232,7 +232,8 @@ class VectorStoreService:
         documents: List[Document],
         user_id: str,
         conversation_id: uuid.UUID,
-        batch_size: int = 100
+        batch_size: int = 100,
+        namespace: Optional[str] = None
     ) -> bool:
         """
         Generates embeddings for document chunks and upserts them into Pinecone in batches.
@@ -240,7 +241,9 @@ class VectorStoreService:
         Args:
             documents: List of LangChain Document objects.
             user_id: The ID of the user uploading the documents.
+            conversation_id: The ID of the conversation to which the documents belong.
             batch_size: Number of vectors to upsert in each batch.
+            namespace: Optional namespace for the documents.
 
         Returns:
             True if all batches were processed successfully, False otherwise.
@@ -255,6 +258,7 @@ class VectorStoreService:
             logger.info("No document chunks provided to add.")
             return True
 
+        logger.info(f"Uploading document chunks to namespace: {namespace!r}")
         logger.info(f"Processing {len(documents)} document chunks for user {user_id} at conversation {conversation_id} in batches of {batch_size}.")
         all_successful = True
         processed_batches = 0
@@ -306,7 +310,7 @@ class VectorStoreService:
 
                 try:
                     upsert_response = await self._execute_blocking(
-                        self.index.upsert, vectors=vectors_to_upsert
+                        self.index.upsert, vectors=vectors_to_upsert, namespace=namespace
                     )
                     logger.info(f"Pinecone upsert response for batch {processed_batches + 1}: {upsert_response}")
                     total_vectors_processed += len(vectors_to_upsert)
