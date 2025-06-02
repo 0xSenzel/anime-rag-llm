@@ -168,14 +168,14 @@ class VectorStoreService:
         # Use asyncio.to_thread for cleaner execution of blocking code
         return await asyncio.to_thread(func, *args, **kwargs)
 
-    async def add_message_embedding(self, message: Message, user_id: str):
+    async def add_message_embedding(self, message: Message, user_id: str, namespace: Optional[str] = None):
         """
         Generates embedding for a message and upserts it into Pinecone.
 
-    Args:
+        Args:
             message: The SQLAlchemy Message object.
             user_id: The ID of the user associated with the conversation.
-                     Passed explicitly to avoid DB lookups here.
+            namespace: Optional namespace for the message in Pinecone.
         """
         if not self.embedding_model:
             logger.error("Embedding model not available.")
@@ -218,8 +218,11 @@ class VectorStoreService:
             # 4. Upsert to Pinecone
             logger.debug(f"Upserting vector for message {vector_id}...")
             try:
+                upsert_kwargs = {"vectors": [vector_to_upsert]}
+                if namespace is not None:
+                    upsert_kwargs["namespace"] = namespace
                 upsert_response = await self._execute_blocking(
-                   self.index.upsert, vectors=[vector_to_upsert]
+                   self.index.upsert, **upsert_kwargs
                 )
                 logger.info(f"Pinecone upsert response for message {vector_id}: {upsert_response}")
             except Exception as upsert_e:
@@ -329,19 +332,23 @@ class VectorStoreService:
 
     async def search_relevant_messages(
         self,
+        user_id: str,
         conversation_id: uuid.UUID,
         query_text: str,
+        namespace: str,
         k: int = 5,
         min_score: float = 0.6,
     ) -> List[Dict]:
         """
-        Searches for messages relevant to the query within a specific conversation.
+        Searches for messages relevant to the query within a specific user's conversation.
 
         Args:
+            user_id: The ID of the user whose conversation is being searched.
             conversation_id: The ID of the conversation to search within.
             query_text: The text to search for relevance.
             k: The maximum number of relevant messages to return.
             min_score: Minimum similarity score to consider a result relevant.
+            namespace: Optional namespace to search within (defaults to user_id if None).
 
         Returns:
             A list of dictionaries, each representing a relevant message with
@@ -356,7 +363,9 @@ class VectorStoreService:
             logger.error(f"Pinecone index not available. Cannot search messages for conversation {conversation_id}.")
             return results
 
-        logger.debug(f"Searching for {k} relevant messages in conversation {conversation_id} with min_score={min_score}")
+        # Determine the namespace to use, defaulting to user_id if not explicitly provided
+        search_namespace = namespace if namespace is not None else str(user_id)
+        logger.debug(f"Searching for {k} relevant messages in conversation {conversation_id} (User: {user_id}) using namespace: {search_namespace!r} with min_score={min_score}")
 
         try:
             # 1. Generate Query Embedding
@@ -365,8 +374,11 @@ class VectorStoreService:
             )
 
             # 2. Define Pinecone Filter
-            pinecone_filter = {"conversation_id": str(conversation_id)}
-            logger.info(f"Querying Pinecone index '{self.index_name}' with filter: {pinecone_filter}")
+            # Filter by conversation_id metadata
+            pinecone_filter = {
+                "conversation_id": str(conversation_id),
+            }
+            logger.info(f"Querying Pinecone index '{self.index_name}' in namespace {search_namespace!r} with filter: {pinecone_filter}")
 
             # 3. Query Pinecone
             query_response = await self._execute_blocking(
@@ -374,13 +386,14 @@ class VectorStoreService:
                 vector=query_vector,
                 filter=pinecone_filter,
                 top_k=k,
-                include_metadata=True
+                include_metadata=True,
+                namespace=search_namespace # Use the determined namespace
             )
             logger.debug(f"Pinecone query raw response: {query_response}")
 
             # 4. Process Results
             if query_response and hasattr(query_response, 'matches') and query_response.matches:
-                logger.info(f"Found {len(query_response.matches)} matches in Pinecone response for convo {conversation_id}.")
+                logger.info(f"Found {len(query_response.matches)} matches in Pinecone response for convo {conversation_id} (User: {user_id}).")
                 for match in query_response.matches:
                     score = getattr(match, 'score', 0.0)
                     if score < min_score:
@@ -395,12 +408,14 @@ class VectorStoreService:
                     created_at_iso = metadata.get('created_at') if metadata else None
 
                     if not all([content, role, created_at_iso, vector_id_str]):
+                        logger.warning(f"Skipping match {vector_id_str}: missing essential metadata.")
                         continue
 
                     try:
                         created_at_dt = datetime.fromisoformat(created_at_iso)
                         message_id = uuid.UUID(vector_id_str)
-                    except Exception:
+                    except (ValueError, TypeError) as id_parse_error:
+                        logger.warning(f"Skipping match {vector_id_str}: failed to parse ID or created_at ({id_parse_error}).")
                         continue
 
                     results.append({
@@ -409,14 +424,18 @@ class VectorStoreService:
                         "role": role,
                         "created_at": created_at_dt,
                         "score": score,
+                        "metadata": metadata
                     })
-                logger.info(f"Processed {len(results)} relevant messages for conversation {conversation_id} after score filtering.")
+                logger.info(f"Processed {len(results)} relevant messages for conversation {conversation_id} (User: {user_id}) after score filtering.")
             else:
-                logger.warning(f"No 'matches' found in Pinecone query response for conversation {conversation_id}.")
+                logger.warning(f"No 'matches' found in Pinecone query response for conversation {conversation_id} (User: {user_id}).")
 
         except Exception as e:
-            logger.error(f"Unexpected error during search_relevant_messages for conversation {conversation_id}: {e}", exc_info=True)
+            logger.error(f"Unexpected error during search_relevant_messages for conversation {conversation_id} (User: {user_id}): {e}", exc_info=True)
             return []
+
+        # Sort results by score descending to return most relevant first
+        results.sort(key=lambda x: x.get('score', 0.0), reverse=True)
 
         return results
 

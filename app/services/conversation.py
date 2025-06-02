@@ -56,7 +56,7 @@ class ConversationService:
 
     # --- Context Assembly ---
 
-    async def get_context_for_llm(self, conversation_id: uuid.UUID, current_query: str) -> List[Dict]:
+    async def get_context_for_llm(self, user_id: str, conversation_id: uuid.UUID, namespace: str, current_query: str) -> List[Dict]:
         """
         Assembles the hybrid context (summary, recent messages, relevant history)
         for the LLM prompt, managing token limits.
@@ -77,7 +77,7 @@ class ConversationService:
             summary_content = f"Summary of earlier conversation:\n{latest_summary.summary_text}"
             summary_tokens = self.tokenizer_svc.count_tokens(summary_content)
             if summary_tokens <= available_tokens:
-                context_parts.append({'role': 'system', 'content': summary_content}) # Use system role for summary
+                context_parts.append({'role': 'system', 'content': summary_content})
                 available_tokens -= summary_tokens
             else:
                 logger.warning(f"Summary for convo {conversation_id} too long ({summary_tokens} words > available {available_tokens}), skipping.")
@@ -92,8 +92,10 @@ class ConversationService:
         if available_tokens > 100: # Only search if we have some token budget left
             try:
                 relevant_history_results = await self.vector_store_svc.search_relevant_messages(
+                    user_id=user_id,
                     conversation_id=conversation_id,
                     query_text=current_query,
+                    namespace=namespace,
                     k=VECTOR_SEARCH_K
                 )
                 # Filter out any results already in the sliding window
@@ -279,7 +281,7 @@ class ConversationService:
             return []
 
     def save_message(self, conversation_id: uuid.UUID, user_id: uuid.UUID, role: str, content: str, embedding_id: Optional[uuid.UUID] = None) -> Message:
-        """Saves a message, updates conversation timestamp. Raises Exception on DB error."""
+        """Saves a message, updates conversation timestamp, and saves embedding to Pinecone. Raises Exception on DB error."""
         # Log the request details
         logger.info(f"Attempting to save message - conversation_id: {conversation_id}, user_id: {user_id}, role: {role}, content length: {len(content)}")
         
@@ -299,6 +301,23 @@ class ConversationService:
             self.db.add(conversation)
             self.db.commit()  # Changed from flush() to commit
             logger.info(f"Saved message {db_message.id} for conversation {conversation_id}")
+
+            # --- Save to Pinecone for long-term memory ---
+            try:
+                import asyncio
+                # Use user_id as namespace (convert to str for Pinecone)
+                namespace = str(user_id)
+                # Schedule async embedding save (fire-and-forget)
+                asyncio.create_task(
+                    self.vector_store_svc.add_message_embedding(
+                        message=db_message,
+                        user_id=str(user_id),
+                        namespace=namespace
+                    )
+                )
+            except Exception as e:
+                logger.error(f"Failed to save message embedding to Pinecone: {e}", exc_info=True)
+
             return db_message
         except sa_exc.SQLAlchemyError as e:
             logger.error(f"Database error saving message for convo {conversation_id}: {e}", exc_info=True)

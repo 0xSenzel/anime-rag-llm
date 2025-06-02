@@ -167,8 +167,6 @@ class LlmService:
         background_tasks: BackgroundTasks, 
         conversation_id: Optional[uuid.UUID] = None,
         character: Optional[str] = None,
-        use_rag: bool = False,
-        rag_k: int = 5,
         model: Optional[str] = None,
     ):
         """
@@ -181,8 +179,6 @@ class LlmService:
             background_tasks (BackgroundTasks): FastAPI BackgroundTasks instance for async operations.
             conversation_id (uuid.UUID): Unique identifier for the conversation thread.
             character (Optional[str]): Name of anime character persona to use for responses.
-            use_rag (bool): Whether to enable RAG using uploaded documents. Defaults to False.
-            rag_k (int): Number of relevant document chunks to retrieve for RAG. Defaults to 5.
             model (Optional[str]): Name of LLM model to use. Defaults to instance default model.
         """
         full_llm_response_parts = []
@@ -196,85 +192,78 @@ class LlmService:
                     conversation = self.conversation_svc.get_conversation_by_id(user_id, conversation_id)
                     logger.debug(f"Using existing conversation {conversation_id}")
                 except ValueError as e:
-                    logger.warning(f"Conversation {conversation_id} not found, creating new one")
+                    # If conversation_id is provided but not found for the user, log and create a new one
+                    logger.warning(f"Conversation {conversation_id} not found for user {user_id}, creating new one: {e}")
                     conversation = self.conversation_svc.create_conversation(user_id)
                     conversation_id = conversation.id
 
-            background_tasks.add_task(self.conversation_svc.save_message, conversation_id, user_id, "user", user_query)
+            context_for_llm = await self.conversation_svc.get_context_for_llm(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                namespace=user_id,
+                current_query=user_query
+            )
+            logger.debug(f"Assembled context for LLM: {len(context_for_llm)} parts")
 
-            conversation_history_context: Optional[List[Dict]] = None
-            try:
-                conversation_history_context = await self.conversation_svc.get_context_for_llm(
-                    conversation_id=conversation_id,
-                    current_query=user_query
-                )
-            except Exception as e:
-                logger.error(f"Error retrieving conversation context for {conversation_id}: {e}", exc_info=True)
-                yield "[Error retrieving conversation context]"
-                return
-
-            # Retrieve RAG context if enabled
-            rag_context_docs: Optional[List[Dict]] = None
-            if use_rag:
-                try:
-                    logger.info(f"Retrieving document chunks for RAG (user: {user_id}, k={rag_k})")
-                    rag_context_docs = await self.vector_store_svc.search_relevant_messages(
-                        conversation_id=conversation_id,
-                        query_text=user_query,
-                        k=rag_k
-                    )
-                    if not rag_context_docs:
-                        logger.warning(f"RAG enabled, but no relevant document chunks found.")
-                    else:
-                        logger.info(f"Found {len(rag_context_docs)} relevant document chunks for RAG.")
-                except Exception as e:
-                    logger.error(f"Error retrieving RAG document chunks: {e}", exc_info=True)
-                    yield "[Error retrieving documents for RAG]"
-                    return
-
-            # Prepare the final prompt
-            final_prompt = self._prepare_prompt_and_context(
+            prompt = self._prepare_prompt_and_context(
                 user_query=user_query,
-                conversation_history=conversation_history_context,
-                rag_context_docs=rag_context_docs,
+                conversation_history=context_for_llm,
+                rag_context_docs=None,
                 character=character
             )
 
-            # Stream LLM response
-            sync_iterable_response = self._generate_sync_stream(
-                prompt=final_prompt,
-                model=model # Uses instance default if None
+            # 4. Save the user message to DB and Pinecone (asynchronously)
+            # Schedule the user message to be saved in the background.
+            # The save_message function handles both DB persistence and Pinecone upserting.
+            background_tasks.add_task(
+                self.conversation_svc.save_message,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                role="user",
+                content=user_query
             )
 
-            async for text_chunk in self._consume_stream_async(sync_iterable_response):
-                yield text_chunk
-                full_llm_response_parts.append(text_chunk)
+            # 5. Stream response from LLM
+            # The actual LLM call happens here, using the prepared prompt.
+            sync_stream = self._generate_sync_stream(
+                prompt=prompt,
+                model=model
+            )
 
-            # Save LLM's full response (background)
-            if conversation_id and full_llm_response_parts:
-                full_response_text = "".join(full_llm_response_parts)
-                if full_response_text.strip(): # Only save if there's content
-                    background_tasks.add_task(
-                        self.conversation_svc.save_message,
-                        conversation_id,
-                        user_id, # Or a system/bot ID
-                        "assistant",
-                        full_response_text
-                    )
-            
-            # Perform summarization if needed (background)
-            if conversation_id:
+            # 6. Process and yield stream chunks
+            async for chunk in self._consume_stream_async(sync_stream):
+                 yield chunk # Yield parts of the response as they come in
+                 full_llm_response_parts.append(chunk) # Accumulate for saving
+
+            # 7. Process full response (e.g., save assistant message, trigger summarization)
+            full_response_content = "".join(full_llm_response_parts)
+            if full_response_content:
+                logger.info(f"Full LLM response received for conversation {conversation_id}. Content length: {len(full_response_content)}")
+                # Save the assistant's response
+                # Schedule the assistant message to be saved in the background.
+                # This uses the save_message function which handles both DB and Pinecone.
                 background_tasks.add_task(
-                    self._background_summarize_if_needed,
-                    conversation_id,
+                    self.conversation_svc.save_message,
+                    conversation_id=conversation_id,
+                    user_id=user_id, # Pass user_id to associate the message
+                    role="assistant",
+                    content=full_response_content
                 )
 
-        except ConnectionError as conn_err:
-            logger.error(f"LLM Connection Error during streaming: {conn_err}", exc_info=True)
-            yield f"[LLM Stream Error: {conn_err}]"
+                # Trigger background summarization if needed
+                background_tasks.add_task(
+                    self._background_summarize_if_needed,
+                    conversation_id=conversation_id
+                )
+            else:
+                logger.warning(f"Received empty LLM response for conversation {conversation_id}.")
+
+        except ConnectionError as ce:
+            logger.error(f"LLM Connection Error during stream for user {user_id}, convo {conversation_id}: {ce}", exc_info=True)
+            yield f"An error occurred connecting to the AI model: {ce}"
         except Exception as e:
-            logger.error(f"Error setting up or running LLM streaming: {e}", exc_info=True)
-            yield "[STREAMING SETUP ERROR]"
+            logger.error(f"Unexpected error during stream for user {user_id}, convo {conversation_id}: {e}", exc_info=True)
+            yield f"An unexpected error occurred: {e}"
         finally:
             # Ensure any pending background tasks related to this request are robustly handled
             # (FastAPI handles this for tasks added to BackgroundTasks instance)
@@ -393,7 +382,7 @@ class LlmService:
                     summary_text = await self.summarize_text_async(formatted_text_to_summarize)
                     if summary_text:
                         # save_summary should be an async method in ConversationService expecting UUID
-                        await self.conversation_svc.save_summary(conv_id_uuid, summary_text)
+                        await self.conversation_svc.save_summary(conversation_id, summary_text)
                         logger.info(f"Summary saved for conversation {conversation_id}")
                     else:
                         logger.warning(f"Summarization did not produce text for conversation {conversation_id}")
