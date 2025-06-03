@@ -26,8 +26,6 @@ async def chat_endpoint(
             background_tasks=background_tasks,
             conversation_id=request.conversation_id,
             character=request.character,
-            use_rag=request.use_rag,
-            rag_k=request.rag_k
         ):
             answer += chunk
 
