@@ -4,6 +4,7 @@ from typing import List, Optional, Tuple, Dict
 from sqlalchemy.orm import Session
 from sqlalchemy import func, select, and_, exc as sa_exc # Added exc
 from datetime import datetime, timezone
+from fastapi import BackgroundTasks
 
 # Import models
 from app.models.conversation import Conversation
@@ -280,7 +281,15 @@ class ConversationService:
             self.db.rollback()
             return []
 
-    def save_message(self, conversation_id: uuid.UUID, user_id: uuid.UUID, role: str, content: str, embedding_id: Optional[uuid.UUID] = None) -> Message:
+    def save_message(
+        self, 
+        conversation_id: uuid.UUID, 
+        user_id: uuid.UUID, 
+        role: str, 
+        content: str, 
+        background_tasks: BackgroundTasks,
+        embedding_id: Optional[uuid.UUID] = None
+    ) -> Message:
         """Saves a message, updates conversation timestamp, and saves embedding to Pinecone. Raises Exception on DB error."""
         # Log the request details
         logger.info(f"Attempting to save message - conversation_id: {conversation_id}, user_id: {user_id}, role: {role}, content length: {len(content)}")
@@ -304,21 +313,20 @@ class ConversationService:
 
             # --- Save to Pinecone for long-term memory ---
             try:
-                import asyncio
                 # Use user_id as namespace (convert to str for Pinecone)
                 namespace = str(user_id)
-                # Schedule async embedding save (fire-and-forget)
-                asyncio.create_task(
-                    self.vector_store_svc.add_message_embedding(
-                        message=db_message,
-                        user_id=str(user_id),
-                        namespace=namespace
-                    )
+                # Schedule async embedding save using background task
+                background_tasks.add_task(
+                    self.vector_store_svc.add_message_embedding,
+                    message=db_message,
+                    user_id=str(user_id),
+                    namespace=namespace
                 )
             except Exception as e:
-                logger.error(f"Failed to save message embedding to Pinecone: {e}", exc_info=True)
+                logger.error(f"Failed to schedule message embedding for Pinecone: {e}", exc_info=True)
 
             return db_message
+
         except sa_exc.SQLAlchemyError as e:
             logger.error(f"Database error saving message for convo {conversation_id}: {e}", exc_info=True)
             self.db.rollback()

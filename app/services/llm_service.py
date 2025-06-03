@@ -218,7 +218,8 @@ class LlmService:
                 conversation_id=conversation_id,
                 user_id=user_id,
                 role="user",
-                content=user_query
+                content=user_query,
+                background_tasks=background_tasks
             )
 
             # The actual LLM call happens here, using the prepared prompt.
@@ -242,9 +243,10 @@ class LlmService:
                 background_tasks.add_task(
                     self.conversation_svc.save_message,
                     conversation_id=conversation_id,
-                    user_id=user_id, # Pass user_id to associate the message
+                    user_id=user_id,
                     role="assistant",
-                    content=full_response_content
+                    content=full_response_content,
+                    background_tasks=background_tasks
                 )
 
                 # Trigger background summarization if needed
