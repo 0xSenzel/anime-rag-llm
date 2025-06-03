@@ -212,8 +212,6 @@ class LlmService:
                 character=character
             )
 
-            # 4. Save the user message to DB and Pinecone (asynchronously)
-            # Schedule the user message to be saved in the background.
             # The save_message function handles both DB persistence and Pinecone upserting.
             background_tasks.add_task(
                 self.conversation_svc.save_message,
@@ -223,19 +221,18 @@ class LlmService:
                 content=user_query
             )
 
-            # 5. Stream response from LLM
             # The actual LLM call happens here, using the prepared prompt.
             sync_stream = self._generate_sync_stream(
                 prompt=prompt,
                 model=model
             )
 
-            # 6. Process and yield stream chunks
+            # Process and yield stream chunks
             async for chunk in self._consume_stream_async(sync_stream):
                  yield chunk # Yield parts of the response as they come in
                  full_llm_response_parts.append(chunk) # Accumulate for saving
 
-            # 7. Process full response (e.g., save assistant message, trigger summarization)
+            # Process full response (e.g., save assistant message, trigger summarization)
             full_response_content = "".join(full_llm_response_parts)
             if full_response_content:
                 logger.info(f"Full LLM response received for conversation {conversation_id}. Content length: {len(full_response_content)}")
