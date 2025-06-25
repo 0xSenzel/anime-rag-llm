@@ -199,10 +199,10 @@ class LlmService:
 
             context_for_llm = await self.conversation_svc.get_context_for_llm(
                 user_id=user_id,
-                conversation_id=conversation_id,
+                    conversation_id=conversation_id,
                 namespace=user_id,
-                current_query=user_query
-            )
+                    current_query=user_query
+                )
             logger.debug(f"Assembled context for LLM: {len(context_for_llm)} parts")
 
             prompt = self._prepare_prompt_and_context(
@@ -240,15 +240,15 @@ class LlmService:
                 # Save the assistant's response
                 # Schedule the assistant message to be saved in the background.
                 # This uses the save_message function which handles both DB and Pinecone.
-                background_tasks.add_task(
-                    self.conversation_svc.save_message,
+                    background_tasks.add_task(
+                        self.conversation_svc.save_message,
                     conversation_id=conversation_id,
                     user_id=user_id,
                     role="assistant",
                     content=full_response_content,
                     background_tasks=background_tasks
-                )
-
+                    )
+            
                 # Trigger background summarization if needed
                 background_tasks.add_task(
                     self._background_summarize_if_needed,

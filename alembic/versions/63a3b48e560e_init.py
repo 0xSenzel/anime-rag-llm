@@ -1,8 +1,8 @@
-"""init table
+"""init
 
-Revision ID: 115244cb40ed
+Revision ID: 63a3b48e560e
 Revises: 
-Create Date: 2025-05-14 20:01:10.074576
+Create Date: 2025-06-18 20:45:08.385968
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '115244cb40ed'
+revision: str = '63a3b48e560e'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -43,6 +43,7 @@ def upgrade() -> None:
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('user_id', sa.String(), nullable=False),
+    sa.Column('title', sa.String(length=200), nullable=True),
     sa.Column('character', sa.String(length=100), nullable=True),
     sa.PrimaryKeyConstraint('id')
     )
@@ -62,6 +63,19 @@ def upgrade() -> None:
     op.create_index(op.f('ix_messages_conversation_id'), 'messages', ['conversation_id'], unique=False)
     op.create_index(op.f('ix_messages_created_at'), 'messages', ['created_at'], unique=False)
     op.create_index(op.f('ix_messages_embedding_id'), 'messages', ['embedding_id'], unique=False)
+    op.create_table('profiles',
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('email', sa.String(length=255), nullable=False),
+    sa.Column('full_name', sa.String(length=255), nullable=True),
+    sa.Column('avatar_url', sa.String(length=500), nullable=True),
+    sa.Column('is_active', sa.Boolean(), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.ForeignKeyConstraint(['id'], ['auth.users.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_profiles_email'), 'profiles', ['email'], unique=True)
+    op.create_index(op.f('ix_profiles_id'), 'profiles', ['id'], unique=True)
     op.create_table('summaries',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('conversation_id', sa.UUID(), nullable=False),
@@ -81,6 +95,9 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_summaries_created_at'), table_name='summaries')
     op.drop_index(op.f('ix_summaries_conversation_id'), table_name='summaries')
     op.drop_table('summaries')
+    op.drop_index(op.f('ix_profiles_id'), table_name='profiles')
+    op.drop_index(op.f('ix_profiles_email'), table_name='profiles')
+    op.drop_table('profiles')
     op.drop_index(op.f('ix_messages_embedding_id'), table_name='messages')
     op.drop_index(op.f('ix_messages_created_at'), table_name='messages')
     op.drop_index(op.f('ix_messages_conversation_id'), table_name='messages')

@@ -34,6 +34,22 @@ if config.config_file_name is not None:
 # target_metadata = mymodel.Base.metadata
 target_metadata = Base.metadata
 
+# --- Add this function ---
+def include_object(object, name, type_, reflected, compare_to):
+    supabase_schemas = {"auth", "realtime", "storage", "vault"}
+    if type_ == "table" and object.schema in supabase_schemas:
+        return False
+    if type_ == "index" and object.table.schema in supabase_schemas:
+        return False
+    return True
+
+def include_name(name, type_, parent_names):
+    if type_ == "schema":
+        return name in ["public"]
+    return True
+
+# --- End Add ---
+
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
@@ -68,6 +84,10 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_schemas=True,
+        include_name=include_name,
+        include_object=include_object,
+        compare_type=True,
     )
 
     with context.begin_transaction():
@@ -90,7 +110,11 @@ def run_migrations_online() -> None:
 
     with connectable.connect() as connection:
         context.configure(
-            connection=connection, target_metadata=target_metadata
+            connection=connection,
+            target_metadata=target_metadata,
+            include_schemas=True,
+            include_object=include_object,
+            compare_type=True,
         )
 
         with context.begin_transaction():

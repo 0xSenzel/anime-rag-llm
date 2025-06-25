@@ -8,4 +8,5 @@ from .characters import Character
 from .conversation import Conversation
 from .message import Message
 from .summary import Summary
+from .profile import Profile
 # Add imports for any other models you create here in the future
