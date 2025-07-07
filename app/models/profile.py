@@ -23,6 +23,7 @@ class Profile(Base):
         unique=True,
         index=True,
     )
+    google_id = Column(String, unique=True, index=True, nullable=True)
     email = Column(String(255), unique=True, index=True, nullable=False)
     full_name = Column(String(255))
     avatar_url = Column(String(500))

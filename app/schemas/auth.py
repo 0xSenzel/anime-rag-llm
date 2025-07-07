@@ -31,3 +31,11 @@ class UserResponse(UserBase):
 class GoogleAuthRequest(BaseModel):
     code: str
     redirect_uri: str
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "code": "4/0AVMBsJiv_hTPqCO0-FQ26mgBpq6UveMTxoB97n29mWAaTYzAGDr1GBsD1OUdp7-yl3P7XQ",
+                "redirect_uri": "http://localhost:3000/auth/callback"
+            }
+        }
